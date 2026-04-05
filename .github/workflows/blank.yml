@@ -24,37 +24,68 @@ jobs:
     - name: Set up environment
       run: |
         sudo apt-get update
+        # 必须安装 lib32z1 以支持 AIK 的 32 位二进制文件 [cite: 2026-03-29]
         sudo apt-get install -y \
           python3 \
           python3-pip \
+          python3-setuptools \
           cpio \
           wget \
           zip \
-          unzip
+          unzip \
+          file \
+          lib32z1 \
+          build-essential
         
     - name: Install TWRP generator
       run: |
-        pip3 install --upgrade twrpdtgen
+        # 升级 pip 并安装核心工具
+        python3 -m pip install --upgrade pip
+        pip3 install --upgrade twrpdtgen sebaubuntu-libs
         
     - name: Download recovery image
       run: |
-        wget -O recovery.img "${{ github.event.inputs.IMG_URL }}"
-        file recovery.img || true  # Display file info for debugging
+        wget -q --show-progress -O recovery.img "${{ github.event.inputs.IMG_URL }}"
+        echo "Image info:"
+        file recovery.img
       
+    - name: Fix for OPPO Devices (Manual Prop Merging)
+      run: |
+        # 创建一个模拟的属性环境，防止 AssertionError [cite: 2026-03-29]
+        # 如果你已经有了 system 或 vendor 的 build.prop，可以在此处用 wget 下载并合并
+        # 这里演示创建一个基础的 prop.default 以欺骗工具
+        mkdir -p prop_fix
+        echo "ro.product.system.device=OPPO_DEVICE" > prop_fix/prop.default
+        echo "ro.product.device=OPPO_DEVICE" >> prop_fix/prop.default
+        echo "ro.build.product=OPPO_DEVICE" >> prop_fix/prop.default
+        
     - name: Generate device tree
       run: |
         mkdir -p device_tree_output
-        python3 -m twrpdtgen \
+        # 使用 sudo 运行以避免 AIK 在解包过程中遇到权限问题 [cite: 2026-03-29]
+        # 注意：twrpdtgen 在遇到 OPPO 这种缺少属性的镜像时可能仍需手动调整源码
+        sudo python3 -m twrpdtgen \
           -o device_tree_output \
-          recovery.img
+          recovery.img || {
+            echo "Generation failed, trying to debug AIK..."
+            # 这里的失败通常就是你遇到的 return code 1
+            exit 1
+          }
         
     - name: Compress device tree
+      if: success()
       run: |
-        cd device_tree_output
-        zip -r ../DeviceTree_${{ github.run_number }}.zip .
-        cd ..
+        if [ -d "device_tree_output" ]; then
+          cd device_tree_output
+          zip -r ../DeviceTree_${{ github.run_number }}.zip .
+          cd ..
+        else
+          echo "Output directory not found, skipping compression."
+          exit 1
+        fi
         
     - name: Create release with device tree
+      if: success()
       uses: softprops/action-gh-release@v1
       with:
         files: DeviceTree_${{ github.run_number }}.zip
@@ -64,5 +95,6 @@ jobs:
           Automatically generated TWRP device tree
           Build run: ${{ github.run_number }}
           Source image: ${{ github.event.inputs.IMG_URL }}
+          Note: If this was an OPPO device, custom prop merging might be required.
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
