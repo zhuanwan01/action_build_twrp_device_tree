@@ -39,38 +39,25 @@ jobs:
         
     - name: Install TWRP generator
       run: |
-        # 升级 pip 并安装核心工具
-        python3 -m pip install --upgrade pip
-        pip3 install --upgrade twrpdtgen sebaubuntu-libs
+        # 强制安装到全局系统路径，确保 sudo 环境能访问 [cite: 2026-03-29]
+        sudo python3 -m pip install --upgrade pip
+        sudo python3 -m pip install --upgrade twrpdtgen sebaubuntu-libs
         
     - name: Download recovery image
       run: |
         wget -q --show-progress -O recovery.img "${{ github.event.inputs.IMG_URL }}"
-        echo "Image info:"
+        echo "检查镜像类型..."
         file recovery.img
       
-    - name: Fix for OPPO Devices (Manual Prop Merging)
-      run: |
-        # 创建一个模拟的属性环境，防止 AssertionError [cite: 2026-03-29]
-        # 如果你已经有了 system 或 vendor 的 build.prop，可以在此处用 wget 下载并合并
-        # 这里演示创建一个基础的 prop.default 以欺骗工具
-        mkdir -p prop_fix
-        echo "ro.product.system.device=OPPO_DEVICE" > prop_fix/prop.default
-        echo "ro.product.device=OPPO_DEVICE" >> prop_fix/prop.default
-        echo "ro.build.product=OPPO_DEVICE" >> prop_fix/prop.default
-        
     - name: Generate device tree
       run: |
         mkdir -p device_tree_output
-        # 使用 sudo 运行以避免 AIK 在解包过程中遇到权限问题 [cite: 2026-03-29]
-        # 注意：twrpdtgen 在遇到 OPPO 这种缺少属性的镜像时可能仍需手动调整源码
-        sudo python3 -m twrpdtgen \
-          -o device_tree_output \
-          recovery.img || {
-            echo "Generation failed, trying to debug AIK..."
-            # 这里的失败通常就是你遇到的 return code 1
-            exit 1
-          }
+        # 使用 sudo 运行 twrpdtgen [cite: 2026-03-29]
+        # 如果提示找不到模块，我们尝试直接调用其安装后的可执行路径
+        sudo python3 -m twrpdtgen -o device_tree_output recovery.img || {
+          echo "如果依然提示 No module named，尝试强制路径运行..."
+          sudo $(which python3) -m twrpdtgen -o device_tree_output recovery.img
+        }
         
     - name: Compress device tree
       if: success()
@@ -80,7 +67,7 @@ jobs:
           zip -r ../DeviceTree_${{ github.run_number }}.zip .
           cd ..
         else
-          echo "Output directory not found, skipping compression."
+          echo "未发现生成目录"
           exit 1
         fi
         
@@ -92,9 +79,7 @@ jobs:
         name: TWRP_Device_Tree_${{ github.run_number }}
         tag_name: dt-${{ github.run_number }}
         body: |
-          Automatically generated TWRP device tree
           Build run: ${{ github.run_number }}
           Source image: ${{ github.event.inputs.IMG_URL }}
-          Note: If this was an OPPO device, custom prop merging might be required.
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
